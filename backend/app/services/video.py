@@ -125,7 +125,8 @@ def render_short(
     crop_filter: str,
     output_path: str,
     subtitle_path: str = None,
-    gpu_available: bool = False
+    gpu_available: bool = False,
+    has_audio: bool = True
 ) -> bool:
     """Cut, crop, normalize audio, add subtitles, and encode to output path."""
     
@@ -144,10 +145,14 @@ def render_short(
     video_filter_str = ",".join(video_filters)
     cmd.extend(["-vf", video_filter_str])
     
-    # Audio filters: normalize volume and reduce background noise
-    # afftdn: FFT denoiser, loudnorm: EBU R128 loudness normalization
-    audio_filter_str = "afftdn,loudnorm"
-    cmd.extend(["-af", audio_filter_str])
+    # Audio filters & encoding mapping
+    if has_audio:
+        # afftdn: FFT denoiser, loudnorm: EBU R128 loudness normalization
+        audio_filter_str = "afftdn,loudnorm"
+        cmd.extend(["-af", audio_filter_str])
+    else:
+        # Strip audio completely to avoid FFmpeg link/filter failures
+        cmd.extend(["-an"])
     
     # 3. Setup encoders
     if gpu_available:
@@ -166,9 +171,13 @@ def render_short(
             "-crf", "22"
         ])
         
+    if has_audio:
+        cmd.extend([
+            "-c:a", "aac",
+            "-b:a", "192k"
+        ])
+        
     cmd.extend([
-        "-c:a", "aac",
-        "-b:a", "192k",
         "-movflags", "+faststart",
         output_path
     ])

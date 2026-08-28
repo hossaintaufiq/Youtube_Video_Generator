@@ -119,51 +119,35 @@ def generate_sentences(words: list) -> list:
             
     return sentences
 
-def score_candidate(text: str, start: float, end: float, scene_changes: list, sentence_start: dict, sentence_end: dict) -> dict:
-    """Score a candidate clip based on our multi-factor NLP heuristics."""
+def score_candidate(text: str, start: float, end: float, scene_changes: list, sentence_start: dict, sentence_end: dict, strategy: str = "viral") -> dict:
+    """Score a candidate clip based on our multi-factor NLP heuristics and strategy weights."""
     duration = end - start
     
-    # 1. Hook Score (25 points max)
-    # Check the first few words of the first sentence
+    # 1. Hook Score (Base Max 25)
     hook_text = sentence_start["text"].lower()
     first_words = re.findall(r"\b\w+\b", hook_text)[:5]
-    
     hook_points = 12.5  # Neutral base
-    
-    # Penalize filler openings or greetings
     if any(w in GREETINGS_FILLERS for w in first_words):
         hook_points -= 8
-    
-    # Reward hook keyword matches
     if any(w in HOOK_KEYWORDS for w in first_words):
         hook_points += 10.5
-        
     hook_points = max(0.0, min(25.0, hook_points))
     
-    # 2. Completeness & Boundary Cleanliness (25 points max)
+    # 2. Completeness & Boundary Cleanliness (Base Max 25)
     completeness_points = 25.0
     text_clean = text.strip()
-    
-    # Does it start with a capitalized word?
     if text_clean and not text_clean[0].isupper():
         completeness_points -= 5
-        
-    # Does it end with terminal punctuation?
     if text_clean and text_clean[-1] not in {".", "?", "!"}:
         completeness_points -= 10
-        
-    # Does it end with an unfinished conjunction?
     last_words = text_clean.lower().split()
     if last_words and last_words[-1] in {"and", "but", "because", "so", "or", "if"}:
         completeness_points -= 10
-        
     completeness_points = max(0.0, min(25.0, completeness_points))
     
-    # 3. Pacing / Speech rate (15 points max)
-    # Ideal words per minute (WPM) = 130 to 160 WPM
+    # 3. Pacing / Speech rate (Base Max 15)
     words = text_clean.split()
     wpm = (len(words) / duration) * 60
-    
     if 130 <= wpm <= 165:
         pacing_points = 15.0
     elif 100 <= wpm < 130 or 165 < wpm <= 190:
@@ -171,26 +155,21 @@ def score_candidate(text: str, start: float, end: float, scene_changes: list, se
     else:
         pacing_points = 5.0
         
-    # 4. Information Density (15 points max)
-    # Ratio of content words (non-stop words) to total words
+    # 4. Information Density (Base Max 15)
     content_words = [w for w in words if w.lower() not in STOP_WORDS]
     density_ratio = len(content_words) / max(1, len(words))
     density_points = min(15.0, density_ratio * 30.0)
     
-    # 5. Visual Scene Changes (10 points max)
-    # Visual action (scene cuts inside the clip).
-    # 2-5 scene cuts per 18 seconds is ideal.
+    # 5. Visual Scene Changes (Base Max 10)
     cuts_in_clip = sum(1 for ts in scene_changes if start <= ts <= end)
     if 2 <= cuts_in_clip <= 6:
         visual_points = 10.0
     elif cuts_in_clip == 1 or 6 < cuts_in_clip <= 9:
         visual_points = 7.0
     else:
-        # 0 cuts (static) or excessive cuts (noisy)
         visual_points = 4.0
         
-    # 6. Content/Keyword Match (10 points max)
-    # Reward presence of numbers, quotes, or strong adjectives
+    # 6. Content/Keyword Match (Base Max 10)
     content_points = 2.0
     if any(char.isdigit() for char in text):
         content_points += 3.0
@@ -198,19 +177,39 @@ def score_candidate(text: str, start: float, end: float, scene_changes: list, se
         content_points += 5.0
     content_points = min(10.0, content_points)
     
-    # Combine scores
-    base_score = hook_points + completeness_points + pacing_points + density_points + visual_points + content_points
-    
-    reason = "Balanced information density and smooth pacing."
-    if hook_points > 18:
-        reason = "Strong hook statement and complete sentence structure."
-    elif content_points > 7:
-        reason = "High-value statement with key information keywords."
-    elif visual_points == 10:
-        reason = "Good editing pace and scene changes."
+    # Apply Strategy Multipliers
+    if strategy == "viral":
+        # Boost hook impact (Multiplier 1.2 on hook, normal elsewhere)
+        hook_points *= 1.2
+        reason = "Extremely strong viral hook openings."
+    elif strategy == "info":
+        # Boost density and content keywords
+        density_points *= 1.5
+        content_points *= 1.5
+        hook_points *= 0.6
+        reason = "High density of educational keywords and facts."
+    elif strategy == "visual":
+        # Boost visual cuts and pacing
+        visual_points *= 2.0
+        pacing_points *= 1.3
+        completeness_points *= 0.6
+        reason = "Fast paced narration with high frequency of scene cuts."
+    elif strategy == "story":
+        # Boost pacing structure and boundary cleanliness
+        pacing_points *= 1.6
+        completeness_points *= 1.4
+        hook_points *= 0.6
+        visual_points *= 0.6
+        reason = "Complete storytelling narrative with organic flow."
+    else:
+        reason = "Balanced information density and smooth pacing."
         
+    base_score = hook_points + completeness_points + pacing_points + density_points + visual_points + content_points
+    # Clamp final score out of 100
+    final_score = max(0.0, min(100.0, base_score))
+    
     return {
-        "score": round(base_score, 1),
+        "score": round(final_score, 1),
         "reason": reason,
         "metrics": {
             "hook": round(hook_points, 1),
@@ -220,17 +219,90 @@ def score_candidate(text: str, start: float, end: float, scene_changes: list, se
         }
     }
 
-def find_best_clips(transcript: dict, scene_changes: list, num_shorts: int = 5) -> list:
+def find_best_clips_visual(
+    scene_changes: list,
+    num_shorts: int,
+    min_dur: float,
+    max_dur: float,
+    video_duration: float
+) -> list:
+    """Fallback selector that uses visual scene changes to select clips when no audio is present."""
+    logger.info("Falling back to visual scene-change clip selection...")
+    target_dur = (min_dur + max_dur) / 2.0
+    
+    # Generate candidate windows
+    candidates = []
+    step = 5.0  # seconds stride
+    
+    start_time = 0.0
+    while start_time + min_dur <= video_duration:
+        end_time = min(video_duration, start_time + target_dur)
+        duration = end_time - start_time
+        
+        # Count scene cuts in this window
+        cuts_in_window = [c for c in scene_changes if start_time <= c <= end_time]
+        num_cuts = len(cuts_in_window)
+        
+        # Score candidate based on visual pacing (aiming for ~1 cut per 4 seconds)
+        ideal_cuts = duration / 4.0
+        score = 100.0 - abs(num_cuts - ideal_cuts) * 10
+        score = max(30.0, min(100.0, score))
+        
+        candidates.append({
+            "start": start_time,
+            "end": end_time,
+            "score": round(score, 1),
+            "reason": f"Visual Segment (Pacing: {num_cuts} cuts, tempo score: {score:.0f}/100)",
+            "text": "Local visual selection (Audio track bypassed)."
+        })
+        
+        start_time += step
+        
+    # Sort by score descending
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    
+    # Filter non-overlapping candidates
+    selected = []
+    for cand in candidates:
+        if len(selected) >= num_shorts:
+            break
+            
+        # Check overlap
+        overlap = False
+        for sel in selected:
+            if not (cand["end"] <= sel["start"] or cand["start"] >= sel["end"]):
+                overlap = True
+                break
+        if not overlap:
+            selected.append(cand)
+            
+    # Sort chronological
+    selected.sort(key=lambda x: x["start"])
+    return selected
+
+def find_best_clips(
+    transcript: dict, 
+    scene_changes: list, 
+    num_shorts: int = 5,
+    min_dur: float = 15.0,
+    max_dur: float = 20.0,
+    strategy: str = "viral",
+    video_duration: float = 0.0
+) -> list:
     """
-    Examine the transcript and select the highest scoring non-overlapping 15-20s clips.
+    Examine the transcript and select the highest scoring non-overlapping clips.
+    Falls back to visual scene changes if no words are found.
     """
     # 1. Flatten all words into a single list
     all_words = []
-    for seg in transcript.get("segments", []):
-        all_words.extend(seg.get("words", []))
+    if transcript and isinstance(transcript, dict):
+        for seg in transcript.get("segments", []):
+            all_words.extend(seg.get("words", []))
         
     if not all_words:
-        logger.warning("No words found in transcript. Cannot select clips.")
+        logger.warning("No words found in transcript. Cannot select clips using speech.")
+        if video_duration > 0:
+            return find_best_clips_visual(scene_changes, num_shorts, min_dur, max_dur, video_duration)
         return []
         
     # 2. Group into sentences
@@ -238,10 +310,10 @@ def find_best_clips(transcript: dict, scene_changes: list, num_shorts: int = 5) 
     if not sentences:
         logger.warning("Could not group transcript into sentences.")
         return []
+
         
     candidates = []
-    min_dur = 15.0
-    max_dur = 20.0
+
     
     # Check if local Ollama is active
     ollama_active = check_ollama_available()
@@ -268,7 +340,7 @@ def find_best_clips(transcript: dict, scene_changes: list, num_shorts: int = 5) 
                 
                 # Compute base NLP score
                 eval_data = score_candidate(
-                    text, start_time, end_time, scene_changes, start_sent, end_sent
+                    text, start_time, end_time, scene_changes, start_sent, end_sent, strategy
                 )
                 
                 # If Ollama is active, combine scores (70% NLP Heuristic, 30% LLM)
@@ -313,6 +385,8 @@ def find_best_clips(transcript: dict, scene_changes: list, num_shorts: int = 5) 
 
 def generate_short_title(text: str) -> str:
     """Generate a punchy 3-5 word clickbait title for the short."""
+    if "Local visual selection" in text or not text.strip():
+        return "Visual Highlight Segment"
     ollama_active = check_ollama_available()
     if ollama_active:
         prompt = f"""

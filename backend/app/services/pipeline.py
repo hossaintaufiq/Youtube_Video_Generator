@@ -78,10 +78,20 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         
     temp_files = []
     
+    def check_cancelled():
+        current_state = get_job_state(job_id)
+        if not current_state:
+            return True
+        if current_state.get("status") == "FAILED" and current_state.get("error") == "Cancelled by user.":
+            return True
+        return False
+        
     try:
+        if check_cancelled(): raise RuntimeError("Cancelled by user.")
         # Detect Hardware
         logger.info(f"[{job_id}] Initializing hardware diagnostics...")
-        hardware_info = detect_hardware()
+        force_cpu = bool(settings.get("force_cpu", False))
+        hardware_info = detect_hardware(force_cpu=force_cpu)
         gpu_available = hardware_info.get("cuda_available", False)
         
         # 1. Analyze Video (Progress 10%)
@@ -97,27 +107,39 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         # Validation
         if metadata["duration"] < 15.0:
             raise ValueError(f"Input video is only {metadata['duration']:.1f}s. It must be at least 15s long.")
-        if not metadata["has_audio"]:
-            raise ValueError("Input video does not contain any audio stream.")
-            
-        # 2. Extract Audio (Progress 25%)
-        state["status_text"] = "Extracting audio track for transcription..."
-        state["progress"] = 25
-        save_job_state(job_id, state)
         
-        temp_wav = TEMP_DIR / f"{job_id}_temp.wav"
-        temp_files.append(temp_wav)
-        if not extract_audio(input_file_path, str(temp_wav)):
-            raise RuntimeError("Failed to extract audio track from video.")
+        has_audio = metadata.get("has_audio", False)
             
-        # 3. Transcribe Video (Progress 50%)
-        state["status_text"] = "Transcribing speech using local Whisper model (this may take a moment)..."
-        state["progress"] = 50
-        save_job_state(job_id, state)
-        
-        transcript = transcribe_audio(str(temp_wav), hardware_info)
+        # 2. Extract Audio & Transcription (Progress 25% -> 50%)
+        transcript = {"segments": []}
+        if has_audio:
+            if check_cancelled(): raise RuntimeError("Cancelled by user.")
+            state["status_text"] = "Extracting audio track for transcription..."
+            state["progress"] = 25
+            save_job_state(job_id, state)
+            
+            temp_wav = TEMP_DIR / f"{job_id}_temp.wav"
+            temp_files.append(temp_wav)
+            if extract_audio(input_file_path, str(temp_wav)):
+                # 3. Transcribe Video (Progress 50%)
+                if check_cancelled(): raise RuntimeError("Cancelled by user.")
+                state["status_text"] = "Transcribing speech using local Whisper model (this may take a moment)..."
+                state["progress"] = 50
+                save_job_state(job_id, state)
+                
+                whisper_model = settings.get("whisper_model", "base")
+                transcript = transcribe_audio(str(temp_wav), hardware_info, model_size=whisper_model)
+            else:
+                logger.warning("Audio extraction failed despite has_audio=True. Bypassing transcription.")
+                has_audio = False
+        else:
+            logger.info("No audio stream detected. Proceeding in silent/visual-only fallback mode.")
+            state["status_text"] = "No audio track detected. Proceeding in visual-only mode..."
+            state["progress"] = 50
+            save_job_state(job_id, state)
         
         # 4. Scene Change Detection (Progress 65%)
+        if check_cancelled(): raise RuntimeError("Cancelled by user.")
         state["status_text"] = "Analyzing video scene cuts and visuals..."
         state["progress"] = 65
         save_job_state(job_id, state)
@@ -125,12 +147,24 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         scene_changes = detect_scenes(input_file_path)
         
         # 5. AI Clip Selection (Progress 75%)
+        if check_cancelled(): raise RuntimeError("Cancelled by user.")
         state["status_text"] = "Running local AI to identify high-value candidate clips..."
         state["progress"] = 75
         save_job_state(job_id, state)
         
         num_shorts = int(settings.get("num_shorts", 5))
-        clips = find_best_clips(transcript, scene_changes, num_shorts=num_shorts)
+        min_dur = float(settings.get("min_duration", 15.0))
+        max_dur = float(settings.get("max_duration", 20.0))
+        strategy = settings.get("strategy", "viral")
+        clips = find_best_clips(
+            transcript, 
+            scene_changes, 
+            num_shorts=num_shorts,
+            min_dur=min_dur,
+            max_dur=max_dur,
+            strategy=strategy,
+            video_duration=metadata["duration"]
+        )
         
         if not clips:
             raise ValueError("Could not find any clear speaking segments or interesting hooks in the video.")
@@ -141,6 +175,7 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         
         rendered_shorts = []
         for idx, clip in enumerate(clips):
+            if check_cancelled(): raise RuntimeError("Cancelled by user.")
             short_idx = idx + 1
             state["status_text"] = f"Generating vertical Short {short_idx} of {len(clips)}: Face tracking & rendering..."
             save_job_state(job_id, state)
@@ -165,16 +200,17 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
             short_filename = f"short_{job_id}_{short_idx}_{safe_title}.mp4"
             output_mp4_path = OUTPUT_DIR / short_filename
             
-            # Render (without subtitles)
-            success = render_short(
-                input_file_path,
-                clip["start"],
-                clip["end"],
-                crop_filter,
-                str(output_mp4_path),
-                subtitle_path=None,
-                gpu_available=gpu_available
-            )
+             # Render (without subtitles)
+             success = render_short(
+                 input_file_path,
+                 clip["start"],
+                 clip["end"],
+                 crop_filter,
+                 str(output_mp4_path),
+                 subtitle_path=None,
+                 gpu_available=gpu_available,
+                 has_audio=has_audio
+             )
             
             if success:
                 # Save metadata for this short
@@ -215,10 +251,13 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         err_msg = str(e)
         logger.error(f"[{job_id}] Pipeline failed: {err_msg}")
         logger.error(traceback.format_exc())
-        state["status"] = "FAILED"
-        state["error"] = err_msg
-        state["status_text"] = f"Error: {err_msg}"
-        save_job_state(job_id, state)
+        if err_msg == "Cancelled by user.":
+            logger.info(f"[{job_id}] Pipeline execution aborted by user cancellation request.")
+        else:
+            state["status"] = "FAILED"
+            state["error"] = err_msg
+            state["status_text"] = f"Error: {err_msg}"
+            save_job_state(job_id, state)
         
     finally:
         # Cleanup temp files

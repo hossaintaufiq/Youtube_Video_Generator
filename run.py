@@ -9,7 +9,7 @@ from pathlib import Path
 # Print ASCII banner
 BANNER = """
    ==================================================
-        ANTIGRAVITY AI VIDEO-TO-SHORTS GENERATOR
+              NEPTUNE SHORTS GENERATOR
    ==================================================
    [*] Running 100% locally with Whisper and FFmpeg
    [*] Starting local servers...

@@ -1,4 +1,5 @@
-# 🎬 Local AI Video-to-Shorts Generator MVP
+# 🔱 Neptune Shorts — Local AI Video-to-Shorts Generator
+
 
 A professional desktop web application that runs **100% locally and privately on your computer**. It takes a single horizontal video file (such as a podcast or talking-head video) as input, analyzes it using speech-to-text transcription, runs local AI heuristic evaluations to find the most engaging 15-20s clips, automatically crops and reframes the visual to a vertical 9:16 layout centering the speaker, and saves the final outputs using AI-generated titles.
 

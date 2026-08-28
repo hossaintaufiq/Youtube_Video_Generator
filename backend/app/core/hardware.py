@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger("shorts-generator")
 
-def detect_hardware():
+def detect_hardware(force_cpu: bool = False):
     info = {
         "os": sys.platform,
         "cpu_count": psutil.cpu_count(logical=True),
@@ -17,6 +17,10 @@ def detect_hardware():
         "compute_type": "int8"  # int8 is best for local CPU Whisper
     }
     
+    if force_cpu:
+        logger.info("Force CPU Mode enabled by user settings. Bypassing CUDA GPU checks.")
+        return info
+        
     try:
         import torch
         if torch.cuda.is_available():
@@ -30,5 +34,6 @@ def detect_hardware():
             logger.info("No CUDA GPU detected. Falling back to CPU mode.")
     except ImportError:
         logger.warning("PyTorch not installed. Falling back to CPU mode.")
+
         
     return info

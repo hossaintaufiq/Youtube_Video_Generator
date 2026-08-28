@@ -8,10 +8,10 @@ export default {
     extend: {
       colors: {
         dark: {
-          bg: "#0B0C10",
-          card: "#1F2833",
-          primary: "#66FCF1",
-          secondary: "#45A29E",
+          bg: "#030C1B",
+          card: "#081C36",
+          primary: "#00F2FE",
+          secondary: "#4FACFE",
           text: "#C5C6C7"
         }
       },
