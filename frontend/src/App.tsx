@@ -114,6 +114,65 @@ export default function App() {
     });
   };
   
+  const [activeMonitorTab, setActiveMonitorTab] = useState<"monitor" | "trending">("monitor");
+  
+  interface TrendingVideo {
+    id: string;
+    title: string;
+    channel: string;
+    category: string;
+    views: string;
+    rank: string;
+    video_id: string;
+    url: string;
+    thumbnail_url: string;
+    license: string;
+    copyright_free: boolean;
+    reason: string;
+  }
+  const [trendingVideos, setTrendingVideos] = useState<TrendingVideo[]>([]);
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>("All");
+  const [ytCheckUrl, setYtCheckUrl] = useState("");
+  const [ytCheckResult, setYtCheckResult] = useState<TrendingVideo | null>(null);
+  const [isCheckingYt, setIsCheckingYt] = useState(false);
+
+  const fetchTrending = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/youtube/trending`);
+      if (res.ok) {
+        const data = await res.json();
+        setTrendingVideos(data);
+      }
+    } catch {
+      showToast("error", "API Error", "Could not fetch trending YouTube videos.");
+    }
+  };
+
+  const handleCheckCopyright = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ytCheckUrl.trim()) return;
+    setIsCheckingYt(true);
+    setYtCheckResult(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/youtube/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: ytCheckUrl })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setYtCheckResult(data);
+        showToast("success", "Scan Complete", "Retrieved stream copyright classification details.");
+      } else {
+        showToast("error", "Scan Failed", "Unable to analyze YouTube licensing.");
+      }
+    } catch {
+      showToast("error", "Connection Error", "Failed to communicate with local copyright analyzer.");
+    } finally {
+      setIsCheckingYt(false);
+    }
+  };
+
   // Drag & drop state
   const [isDragging, setIsDragging] = useState(false);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
@@ -125,6 +184,7 @@ export default function App() {
   useEffect(() => {
     fetchJobs();
     fetchShorts();
+    fetchTrending();
     
     const interval = setInterval(() => {
       fetchJobs();
@@ -673,17 +733,234 @@ export default function App() {
           <div className="lg:col-span-7 flex flex-col gap-4">
             
             {/* Panel Tab Header */}
-            <div className="flex border-b border-[#0f1d36] bg-[#040E20]/50 rounded-t-xl overflow-hidden">
-              <span className="px-4 py-2 text-[10px] font-bold tracking-widest text-[#00F2FE] border-b-2 border-[#00F2FE] bg-[#081C36]/50 uppercase font-mono">
-                Live Timeline Monitor & Streams
-              </span>
-              <span className="px-4 py-2 text-[10px] font-bold tracking-widest text-gray-500 hover:text-white transition-all uppercase font-mono cursor-not-allowed">
-                Output Program
-              </span>
+            <div className="flex border-b border-[#0f1d36] bg-[#040E20]/50 rounded-t-xl overflow-hidden select-none">
+              <button
+                type="button"
+                onClick={() => setActiveMonitorTab("monitor")}
+                className={`px-4 py-2 text-[10px] font-bold tracking-widest uppercase font-mono border-b-2 transition-all ${
+                  activeMonitorTab === "monitor"
+                    ? "text-[#00F2FE] border-[#00F2FE] bg-[#081C36]/50"
+                    : "text-gray-500 hover:text-white border-transparent"
+                }`}
+              >
+                Live Monitor & Streams
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMonitorTab("trending")}
+                className={`px-4 py-2 text-[10px] font-bold tracking-widest uppercase font-mono border-b-2 transition-all ${
+                  activeMonitorTab === "trending"
+                    ? "text-[#00F2FE] border-[#00F2FE] bg-[#081C36]/50"
+                    : "text-gray-500 hover:text-white border-transparent"
+                }`}
+              >
+                Trending YouTube Analyzer
+              </button>
             </div>
 
-            {/* Active processing engine dashboard */}
-            {activeJobs.length > 0 ? (
+            {activeMonitorTab === "trending" ? (
+              <div className="bg-[#081C36] border border-[#0f1d36] rounded-b-2xl rounded-tr-2xl p-5 shadow-2xl flex flex-col gap-6 animate-fadeIn">
+                {/* Header title */}
+                <div className="flex justify-between items-center border-b border-gray-950 pb-3">
+                  <div>
+                    <h3 className="text-xs font-black text-white flex items-center gap-2 tracking-wider uppercase font-mono">
+                      <span className="w-2 h-2 rounded-full bg-[#00F2FE] shrink-0 animate-pulse"></span>
+                      YouTube License Scanner
+                    </h3>
+                    <p className="text-[9px] text-[#4FACFE] mt-0.5 font-mono">Scan YouTube streams for copyright classifications</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchTrending}
+                    className="py-1 px-2.5 rounded bg-gray-950 border border-gray-900 hover:border-gray-800 text-[9px] text-gray-400 hover:text-white font-mono transition-all"
+                  >
+                    ⟳ Refresh Feed
+                  </button>
+                </div>
+
+                {/* Search / Scan box */}
+                <form onSubmit={handleCheckCopyright} className="flex gap-2 bg-[#030C1B] p-2.5 rounded-lg border border-gray-900 shadow-inner">
+                  <input
+                    type="text"
+                    value={ytCheckUrl}
+                    onChange={(e) => setYtCheckUrl(e.target.value)}
+                    placeholder="Paste YouTube Link (e.g. https://www.youtube.com/watch?v=kUaKz7B9XnQ)"
+                    className="flex-1 bg-black border border-gray-950 rounded p-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-[#00F2FE]/50 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isCheckingYt || !ytCheckUrl}
+                    className="py-1.5 px-3 rounded bg-gradient-to-r from-[#00F2FE] to-[#4FACFE] text-[#030C1B] font-black text-[10px] uppercase tracking-wider hover:opacity-90 transition-all shrink-0 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {isCheckingYt ? "Scanning..." : "Scan License"}
+                  </button>
+                </form>
+
+                {/* Scan Result Badge */}
+                {ytCheckResult && (
+                  <div className={`p-3 rounded-lg border flex flex-col gap-2.5 animate-slideIn ${
+                    ytCheckResult.copyright_free 
+                      ? "bg-emerald-950/20 border-emerald-500/20" 
+                      : "bg-red-950/20 border-red-500/20"
+                  }`}>
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex gap-2">
+                        <img 
+                          src={ytCheckResult.thumbnail_url} 
+                          alt="Thumbnail" 
+                          className="w-16 h-10 object-cover rounded border border-gray-900 shrink-0 shadow-md"
+                        />
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[10px] font-bold text-white line-clamp-1">{ytCheckResult.title}</span>
+                          <span className="text-[9px] text-gray-400 font-mono">{ytCheckResult.channel}</span>
+                        </div>
+                      </div>
+                      <span className={`text-[8px] font-mono py-0.5 px-2 rounded-full border shrink-0 font-bold uppercase tracking-wider ${
+                        ytCheckResult.copyright_free
+                          ? "bg-emerald-950 text-emerald-400 border-emerald-500/30"
+                          : "bg-red-950 text-red-400 border-red-500/30"
+                      }`}>
+                        {ytCheckResult.copyright_free ? "✓ Copyright Free" : "⚠️ Copyright Restricted"}
+                      </span>
+                    </div>
+
+                    <div className="text-[10px] leading-relaxed text-gray-300 font-sans border-t border-gray-950 pt-2 flex flex-col gap-1">
+                      <div className="flex justify-between font-mono text-[9px]">
+                        <span className="text-gray-500">License Tag:</span>
+                        <span className={ytCheckResult.copyright_free ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                          {ytCheckResult.license}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-400 italic">"{ytCheckResult.reason}"</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Category Filter Tabs */}
+                <div className="flex flex-wrap gap-1.5 border-b border-gray-950 pb-2">
+                  {["All", "News", "Podcast", "Famous Creator", "Kids", "Nature"].map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setSelectedCategoryFilter(cat)}
+                      className={`py-1 px-2.5 rounded font-mono text-[9px] font-black uppercase tracking-wider transition-all border ${
+                        selectedCategoryFilter.toLowerCase() === cat.toLowerCase()
+                          ? "bg-[#00F2FE]/15 text-[#00F2FE] border-[#00F2FE]/30 shadow-sm shadow-[#00f2fe11]"
+                          : "bg-gray-950 text-gray-500 border-gray-900 hover:text-white"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Categorized Columns Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Copyright Free Category */}
+                  <div className="flex flex-col gap-3 bg-[#030C1B] p-3.5 rounded-xl border border-emerald-500/10 shadow-lg">
+                    <span className="text-[9px] font-bold text-emerald-400 font-mono uppercase tracking-widest flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      ✓ Copyright Free (CC-BY Reuse Allowed)
+                    </span>
+                    <div className="flex flex-col gap-2.5 max-h-[300px] overflow-y-auto pr-1">
+                      {trendingVideos
+                        .filter(v => v.copyright_free)
+                        .filter(v => selectedCategoryFilter === "All" || v.category.toLowerCase() === selectedCategoryFilter.toLowerCase())
+                        .map(video => (
+                          <div key={video.id} className="bg-black/60 p-2 rounded-lg border border-gray-950 hover:border-emerald-500/20 transition-all flex flex-col gap-2">
+                            <div className="flex gap-2">
+                              <img 
+                                src={video.thumbnail_url} 
+                                alt={video.title} 
+                                className="w-16 h-10 object-cover rounded border border-gray-900 shrink-0" 
+                              />
+                              <div className="flex flex-col gap-0.5 truncate">
+                                <span className="text-[10px] font-bold text-white truncate" title={video.title}>{video.title}</span>
+                                <span className="text-[8px] text-gray-500 font-mono truncate">{video.channel}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between text-[8px] font-mono border-t border-gray-950 pt-1.5 mt-0.5">
+                              <div className="flex gap-1.5 items-center">
+                                <span className="text-[#00F2FE]">{video.rank}</span>
+                                <span className="text-gray-600">|</span>
+                                <span className="text-emerald-500/80 font-bold bg-emerald-950/40 px-1 rounded">{video.category}</span>
+                              </div>
+                              <a 
+                                href={video.url} 
+                                target="_blank" 
+                                rel="noreferrer" 
+                                className="text-gray-400 hover:text-white underline cursor-pointer"
+                              >
+                                Open YouTube ↗
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      {trendingVideos
+                        .filter(v => v.copyright_free)
+                        .filter(v => selectedCategoryFilter === "All" || v.category.toLowerCase() === selectedCategoryFilter.toLowerCase()).length === 0 && (
+                          <div className="py-8 text-center text-xs text-gray-600 font-mono italic">
+                            [No matching copyright-free videos found]
+                          </div>
+                        )}
+                    </div>
+                  </div>
+
+                  {/* Copyright Restricted Category */}
+                  <div className="flex flex-col gap-3 bg-[#030C1B] p-3.5 rounded-xl border border-red-500/10 shadow-lg">
+                    <span className="text-[9px] font-bold text-red-400 font-mono uppercase tracking-widest flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></span>
+                      ⚠️ Standard License (Copyright Restricted)
+                    </span>
+                    <div className="flex flex-col gap-2.5 max-h-[300px] overflow-y-auto pr-1">
+                      {trendingVideos
+                        .filter(v => !v.copyright_free)
+                        .filter(v => selectedCategoryFilter === "All" || v.category.toLowerCase() === selectedCategoryFilter.toLowerCase())
+                        .map(video => (
+                          <div key={video.id} className="bg-black/60 p-2 rounded-lg border border-gray-950 hover:border-red-500/20 transition-all flex flex-col gap-2">
+                            <div className="flex gap-2">
+                              <img 
+                                src={video.thumbnail_url} 
+                                alt={video.title} 
+                                className="w-16 h-10 object-cover rounded border border-gray-900 shrink-0" 
+                              />
+                              <div className="flex flex-col gap-0.5 truncate">
+                                <span className="text-[10px] font-bold text-white truncate" title={video.title}>{video.title}</span>
+                                <span className="text-[8px] text-gray-500 font-mono truncate">{video.channel}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between text-[8px] font-mono border-t border-gray-950 pt-1.5 mt-0.5">
+                              <div className="flex gap-1.5 items-center">
+                                <span className="text-red-400">{video.rank}</span>
+                                <span className="text-gray-600">|</span>
+                                <span className="text-red-400/80 font-bold bg-red-950/40 px-1 rounded">{video.category}</span>
+                              </div>
+                              <a 
+                                href={video.url} 
+                                target="_blank" 
+                                rel="noreferrer" 
+                                className="text-gray-400 hover:text-white underline cursor-pointer"
+                              >
+                                Open YouTube ↗
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      {trendingVideos
+                        .filter(v => !v.copyright_free)
+                        .filter(v => selectedCategoryFilter === "All" || v.category.toLowerCase() === selectedCategoryFilter.toLowerCase()).length === 0 && (
+                          <div className="py-8 text-center text-xs text-gray-600 font-mono italic">
+                            [No matching copyright-restricted videos found]
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Active processing engine dashboard */}
+                {activeJobs.length > 0 ? (
               <div className="bg-[#081C36] border border-[#0f1d36] rounded-b-2xl rounded-tr-2xl p-5 shadow-2xl flex flex-col gap-4">
                 <div className="flex justify-between items-center border-b border-gray-950 pb-2.5">
                   <h3 className="text-xs font-black text-white flex items-center gap-2 tracking-wider uppercase font-mono">
@@ -1064,7 +1341,9 @@ export default function App() {
                 </div>
               )}
             </div>
-          </div>
+          </>
+        )}
+      </div>
         </div>
 
         {/* Bottom Section: Generated Shorts List */}
