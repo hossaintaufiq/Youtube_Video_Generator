@@ -1,0 +1,42 @@
+# Python virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & compiled files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Node dependencies & frontend builds
+frontend/node_modules/
+frontend/dist/
+frontend/local.properties
+.eslintcache
+
+# Local user/app configurations & logs
+.env
+*.log
+backend/storage/temp/
+backend/storage/jobs/
+
+# Generated local shorts outputs (prevents committing large video assets)
+shorts/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE config files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
