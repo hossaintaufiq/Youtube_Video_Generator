@@ -105,8 +105,8 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         save_job_state(job_id, state)
         
         # Validation
-        if metadata["duration"] < 15.0:
-            raise ValueError(f"Input video is only {metadata['duration']:.1f}s. It must be at least 15s long.")
+        if metadata["duration"] < 2.0:
+            raise ValueError(f"Input video is too short ({metadata['duration']:.1f}s). It must be at least 2.0s long.")
         
         has_audio = metadata.get("has_audio", False)
             
@@ -156,6 +156,13 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
         min_dur = float(settings.get("min_duration", 15.0))
         max_dur = float(settings.get("max_duration", 20.0))
         strategy = settings.get("strategy", "viral")
+        
+        total_dur = metadata["duration"]
+        # Dynamically scale down min_dur / max_dur if the video is shorter than the minimum duration requested
+        if total_dur < min_dur:
+            min_dur = max(2.0, total_dur / 2.0)
+            max_dur = total_dur
+            
         clips = find_best_clips(
             transcript, 
             scene_changes, 
@@ -163,11 +170,32 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
             min_dur=min_dur,
             max_dur=max_dur,
             strategy=strategy,
-            video_duration=metadata["duration"]
+            video_duration=total_dur
         )
         
         if not clips:
-            raise ValueError("Could not find any clear speaking segments or interesting hooks in the video.")
+            logger.warning("No speaking segments or visual highlights detected by AI. Defaulting to sequential slicing.")
+            if total_dur <= max_dur:
+                clips = [{
+                    "start": 0.0,
+                    "end": total_dur,
+                    "score": 50.0,
+                    "reason": "Default segment (Entire short source video)",
+                    "text": "Source video fits entirely within duration bounds."
+                }]
+            else:
+                segment_dur = min(max_dur, max(min_dur, total_dur / num_shorts))
+                clips = []
+                for i in range(num_shorts):
+                    start = i * (total_dur - segment_dur) / (num_shorts - 1) if num_shorts > 1 else 0.0
+                    end = start + segment_dur
+                    clips.append({
+                        "start": start,
+                        "end": end,
+                        "score": 50.0,
+                        "reason": f"Visual grid segment {i+1} of {num_shorts}",
+                        "text": f"Slicing segment {i+1} from source video."
+                    })
             
         # 6. Render vertical Shorts (Progress 75% -> 95%)
         state["status_text"] = f"Generating vertical Shorts (0 of {len(clips)} completed)..."
@@ -200,8 +228,8 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
             short_filename = f"short_{job_id}_{short_idx}_{safe_title}.mp4"
             output_mp4_path = OUTPUT_DIR / short_filename
             
-             # Render (without subtitles)
-             success = render_short(
+            # Render (without subtitles)
+            success = render_short(
                  input_file_path,
                  clip["start"],
                  clip["end"],
@@ -210,7 +238,7 @@ def run_pipeline(job_id: str, input_file_path: str, settings: dict):
                  subtitle_path=None,
                  gpu_available=gpu_available,
                  has_audio=has_audio
-             )
+            )
             
             if success:
                 # Save metadata for this short
